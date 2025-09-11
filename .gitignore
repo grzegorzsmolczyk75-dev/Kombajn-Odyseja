@@ -1,0 +1,12 @@
+# Wirtualne środowisko
+venv/
+.venv/
+
+# Pliki tymczasowe Pythona
+__pycache__/
+*.pyc
+
+# Pliki stanu i konfiguracji lokalnej
+state.json
+state.json.backup
+.env
