@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Centrum Dowodzenia Bota Margin</title>
+    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #2c3e50; /* Ciemny tło */
+            color: #ecf0f1; /* Jasny tekst */
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            padding-top: 20px;
+        }
+        .container {
+            max-width: 900px;
+        }
+        .card {
+            background-color: #34495e; /* Ciemniejsza karta */
+            border: none;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+        }
+        .card-header {
+            background-color: #2c3e50; /* Jeszcze ciemniejszy nagłówek */
+            color: #1abc9c; /* Akcentowany kolor */
+            font-size: 1.3em;
+            font-weight: bold;
+            border-bottom: 1px solid #1abc9c;
+            border-radius: 10px 10px 0 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .card-body {
+            padding: 25px;
+        }
+        .form-group label {
+            color: #bdc3c7;
+            font-weight: bold;
+        }
+        .form-control, .custom-select {
+            background-color: #4a657c;
+            border: 1px solid #5d7e9e;
+            color: #ecf0f1;
+        }
+        .form-control:focus, .custom-select:focus {
+            background-color: #5d7e9e;
+            border-color: #1abc9c;
+            box-shadow: 0 0 0 0.2rem rgba(26, 188, 156, 0.25);
+        }
+        .btn-primary {
+            background-color: #1abc9c;
+            border-color: #1abc9c;
+            transition: background-color 0.3s ease;
+        }
+        .btn-primary:hover {
+            background-color: #16a085;
+            border-color: #16a085;
+        }
+        .status-badge {
+            font-size: 1em;
+            padding: 8px 15px;
+            border-radius: 20px;
+            min-width: 100px;
+            text-align: center;
+        }
+        .status-czuwanie { background-color: #3498db; } /* Niebieski */
+        .status-pozycja { background-color: #27ae60; } /* Zielony */
+        .status-cooldown { background-color: #f39c12; } /* Pomarańczowy */
+        .status-error { background-color: #e74c3c; } /* Czerwony */
+
+        .stat-value {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #1abc9c;
+        }
+        .stat-label {
+            color: #bdc3c7;
+            font-size: 0.9em;
+        }
+        .positive-pnl { color: #27ae60; } /* Zielony */
+        .negative-pnl { color: #e74c3c; } /* Czerwony */
+        .neutral-pnl { color: #bdc3c7; } /* Szary */
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 60px;
+            height: 34px;
+        }
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            -webkit-transition: .4s;
+            transition: .4s;
+            border-radius: 34px;
+        }
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 26px;
+            width: 26px;
+            left: 4px;
+            bottom: 4px;
+            background-color: white;
+            -webkit-transition: .4s;
+            transition: .4s;
+            border-radius: 50%;
+        }
+        input:checked + .slider {
+            background-color: #1abc9c;
+        }
+        input:focus + .slider {
+            box-shadow: 0 0 1px #1abc9c;
+        }
+        input:checked + .slider:before {
+            -webkit-transform: translateX(26px);
+            -ms-transform: translateX(26px);
+            transform: translateX(26px);
+        }
+        .nav-tabs .nav-link {
+            color: #bdc3c7;
+            border: none;
+            border-bottom: 2px solid transparent;
+        }
+        .nav-tabs .nav-link.active {
+            color: #1abc9c;
+            background-color: transparent;
+            border-color: #1abc9c;
+        }
+        .nav-tabs {
+            border-bottom: 1px solid #4a657c;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="text-center mb-4" style="color: #1abc9c;"><i class="fas fa-robot"></i> Centrum Dowodzenia Bota Margin</h1>
+
+        <div class="card">
+            <div class="card-header">
+                <span>Status Bota</span>
+                <span id="current-time" style="font-size: 0.8em; color: #bdc3c7;"></span>
+            </div>
+            <div class="card-body d-flex justify-content-between align-items-center">
+                <div>
+                    <span id="bot-status" class="status-badge status-czuwanie">Czuwanie</span>
+                </div>
+                <div>
+                    <strong>Dostępne Saldo ({{ config.quote_asset }}):</strong>
+                    <span id="available-balance" class="ml-2">0.00</span>
+                </div>
+            </div>
+        </div>
+
+        <ul class="nav nav-tabs mb-3" id="myTab" role="tablist">
+            <li class="nav-item">
+                <a class="nav-link active" id="config-tab" data-toggle="tab" href="#config" role="tab" aria-controls="config" aria-selected="true"><i class="fas fa-cogs"></i> Konfiguracja</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" id="current-position-tab" data-toggle="tab" href="#current-position" role="tab" aria-controls="current-position" aria-selected="false"><i class="fas fa-chart-line"></i> Bieżąca Pozycja</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" id="stats-tab" data-toggle="tab" href="#stats" role="tab" aria-controls="stats" aria-selected="false"><i class="fas fa-calculator"></i> Statystyki Handlowe</a>
+            </li>
+        </ul>
+
+        <div class="tab-content">
+            <div class="tab-pane fade show active" id="config" role="tabpanel" aria-labelledby="config-tab">
+                <div class="card">
+                    <div class="card-header">
+                        Konfiguracja Bota
+                    </div>
+                    <div class="card-body">
+                        <form id="config-form">
+                            <div class="form-row">
+                                <div class="form-group col-md-6">
+                                    <label for="trade_symbol">Symbol Handlu:</label>
+                                    <select id="trade_symbol" name="trade_symbol" class="custom-select">
+                                        <option value="{{ config.trade_symbol }}" selected>{{ config.trade_symbol }}</option>
+                                    </select>
+                                </div>
+                                <div class="form-group col-md-6">
+                                    <label for="quote_asset">Aktywo Kwotujące:</label>
+                                    <input type="text" id="quote_asset" name="quote_asset" class="form-control" value="{{ config.quote_asset }}" readonly>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group col-md-6">
+                                    <label for="position_size_percent">Rozmiar Pozycji (% salda):</label>
+                                    <input type="number" step="0.1" id="position_size_percent" name="position_size_percent" class="form-control" value="{{ config.position_size_percent }}">
+                                </div>
+                                <div class="form-group col-md-6">
+                                    <label for="min_position_value_usdc">Min. Wartość Pozycji (USDC):</label>
+                                    <input type="number" step="0.1" id="min_position_value_usdc" name="min_position_value_usdc" class="form-control" value="{{ config.min_position_value_usdc }}">
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group col-md-6">
+                                    <label for="max_balance_wait_time_seconds">Max. Czas Czekania na Saldo (s):</label>
+                                    <input type="number" step="1" id="max_balance_wait_time_seconds" name="max_balance_wait_time_seconds" class="form-control" value="{{ config.max_balance_wait_time_seconds }}">
+                                </div>
+                                <div class="form-group col-md-6">
+                                    <label for="sl_percent">Stop Loss (%):</label>
+                                    <input type="number" step="0.1" id="sl_percent" name="sl_percent" class="form-control" value="{{ config.sl_percent }}">
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group col-md-6">
+                                    <label for="exit_strategy">Strategia Wyjścia:</label>
+                                    <select id="exit_strategy" name="exit_strategy" class="custom-select">
+                                        <option value="take_profit" {% if config.exit_strategy == 'take_profit' %}selected{% endif %}>Take Profit</option>
+                                        <option value="trailing_stop" {% if config.exit_strategy == 'trailing_stop' %}selected{% endif %}>Trailing Stop</option>
+                                    </select>
+                                </div>
+                                <div class="form-group col-md-6" id="tp_percent_group" style="display: {% if config.exit_strategy == 'take_profit' %}block{% else %}none{% endif %};">
+                                    <label for="tp_percent">Take Profit (%):</label>
+                                    <input type="number" step="0.1" id="tp_percent" name="tp_percent" class="form-control" value="{{ config.tp_percent }}">
+                                </div>
+                                <div class="form-group col-md-6" id="ts_activation_percent_group" style="display: {% if config.exit_strategy == 'trailing_stop' %}block{% else %}none{% endif %};">
+                                    <label for="ts_activation_percent">TS Aktywacja (%):</label>
+                                    <input type="number" step="0.1" id="ts_activation_percent" name="ts_activation_percent" class="form-control" value="{{ config.ts_activation_percent }}">
+                                </div>
+                                <div class="form-group col-md-6" id="ts_distance_percent_group" style="display: {% if config.exit_strategy == 'trailing_stop' %}block{% else %}none{% endif %};">
+                                    <label for="ts_distance_percent">TS Dystans (%):</label>
+                                    <input type="number" step="0.1" id="ts_distance_percent" name="ts_distance_percent" class="form-control" value="{{ config.ts_distance_percent }}">
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group col-md-6 d-flex align-items-center">
+                                    <label for="reentry_enabled" class="mb-0 mr-3">Ponowne Wejście:</label>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="reentry_enabled" name="reentry_enabled" {% if config.reentry_enabled %}checked{% endif %}>
+                                        <span class="slider round"></span>
+                                    </label>
+                                </div>
+                                <div class="form-group col-md-6">
+                                    <label for="reentry_max_count">Max. Ponownych Wejść:</label>
+                                    <input type="number" step="1" id="reentry_max_count" name="reentry_max_count" class="form-control" value="{{ config.reentry_max_count }}">
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group col-md-6">
+                                    <label for="reentry_cooldown_seconds">Cooldown Re-entry (s):</label>
+                                    <input type="number" step="1" id="reentry_cooldown_seconds" name="reentry_cooldown_seconds" class="form-control" value="{{ config.reentry_cooldown_seconds }}">
+                                </div>
+                                <div class="form-group col-md-6 d-flex align-items-center">
+                                    <label for="pyramid_enabled" class="mb-0 mr-3">Piramidowanie:</label>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="pyramid_enabled" name="pyramid_enabled" {% if config.pyramid_enabled %}checked{% endif %}>
+                                        <span class="slider round"></span>
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="form-row" id="pyramid_settings" style="display: {% if config.pyramid_enabled %}flex{% else %}none{% endif %};">
+                                <div class="form-group col-md-4">
+                                    <label for="pyramid_trigger_percent">Trigger Piramidowania (%):</label>
+                                    <input type="number" step="0.1" id="pyramid_trigger_percent" name="pyramid_trigger_percent" class="form-control" value="{{ config.pyramid_trigger_percent }}">
+                                </div>
+                                <div class="form-group col-md-4">
+                                    <label for="pyramid_step_percent">Krok Piramidowania (% salda):</label>
+                                    <input type="number" step="0.1" id="pyramid_step_percent" name="pyramid_step_percent" class="form-control" value="{{ config.pyramid_step_percent }}">
+                                </div>
+                                <div class="form-group col-md-4">
+                                    <label for="pyramid_max_steps">Max. Kroki Piramidowania:</label>
+                                    <input type="number" step="1" id="pyramid_max_steps" name="pyramid_max_steps" class="form-control" value="{{ config.pyramid_max_steps }}">
+                                </div>
+                            </div>
+                            
+                            <button type="submit" class="btn btn-primary btn-block mt-4">Zapisz Konfigurację</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <div class="tab-pane fade" id="current-position" role="tabpanel" aria-labelledby="current-position-tab">
+                <div class="card">
+                    <div class="card-header">
+                        Bieżąca Pozycja
+                    </div>
+                    <div class="card-body">
+                        <div id="no-position-info" class="alert alert-info text-center" style="display: none;">
+                            Brak otwartej pozycji.
+                        </div>
+                        <div id="position-details" style="display: none;">
+                            <p><strong>Symbol:</strong> <span id="pos-symbol"></span></p>
+                            <p><strong>Strona:</strong> <span id="pos-side"></span></p>
+                            <p><strong>Ilość:</strong> <span id="pos-quantity"></span></p>
+                            <p><strong>Cena Wejścia:</strong> <span id="pos-entry-price"></span></p>
+                            <p><strong>Aktualna Cena:</strong> <span id="pos-current-price"></span></p>
+                            <p><strong>Czas Wejścia:</strong> <span id="pos-entry-timestamp"></span></p>
+                            <hr>
+                            <p><strong>PnL Wartość:</strong> <span id="pos-pnl-value" class="font-weight-bold"></span> <span id="pos-quote-asset"></span></p>
+                            <p><strong>PnL Procent:</strong> <span id="pos-pnl-percent" class="font-weight-bold"></span>%</p>
+                            <hr>
+                            <p><strong>Re-entry Count:</strong> <span id="pos-reentry-count"></span> / <span id="pos-reentry-max-count"></span></p>
+                            <p id="pos-reentry-cooldown" style="display: none;"><strong>Cooldown Re-entry:</strong> <span id="pos-reentry-cooldown-value"></span>s</p>
+                            <button id="close-position-btn" class="btn btn-danger btn-block mt-3"><i class="fas fa-times-circle"></i> Awaryjne Zamknięcie Pozycji</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="tab-pane fade" id="stats" role="tabpanel" aria-labelledby="stats-tab">
+                <div class="card">
+                    <div class="card-header">
+                        Statystyki Handlowe
+                    </div>
+                    <div class="card-body text-center">
+                        <div class="row mb-3">
+                            <div class="col-md-4">
+                                <div class="stat-value" id="stats-total-pnl">{{ "%.2f"|format(stats.total_pnl) }}</div>
+                                <div class="stat-label">Całkowity PnL</div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="stat-value" id="stats-total-positions">{{ stats.total_positions }}</div>
+                                <div class="stat-label">Liczba Pozycji</div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="stat-value" id="stats-win-rate">{{ "%.2f"|format(stats.win_rate) }}%</div>
+                                <div class="stat-label">Win Rate</div>
+                            </div>
+                        </div>
+                        <div class="row">
+                            <div class="col-md-4">
+                                <div class="stat-value" id="stats-avg-pnl">{{ "%.2f"|format(stats.avg_pnl_per_trade) }}</div>
+                                <div class="stat-label">Średni PnL/Transakcję</div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="stat-value positive-pnl" id="stats-max-profit">{{ "%.2f"|format(stats.max_profit_trade) }}</div>
+                                <div class="stat-label">Max Zysk</div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="stat-value negative-pnl" id="stats-max-loss">{{ "%.2f"|format(stats.max_loss_trade) }}</div>
+                                <div class="stat-label">Max Strata</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+    <script>
+        $(document).ready(function() {
+            function updateClock() {
+                const now = new Date();
+                const hours = String(now.getHours()).padStart(2, '0');
+                const minutes = String(now.getMinutes()).padStart(2, '0');
+                const seconds = String(now.getSeconds()).padStart(2, '0');
+                $('#current-time').text(`${hours}:${minutes}:${seconds}`);
+            }
+            setInterval(updateClock, 1000);
+            updateClock(); // Initial call
+
+            function updateStatus() {
+                $.getJSON('/status', function(data) {
+                    $('#available-balance').text(data.balance.toFixed(2));
+                    
+                    $('#bot-status').text(data.status_text);
+                    $('#bot-status').removeClass().addClass('status-badge');
+                    if (data.in_position) {
+                        $('#bot-status').addClass('status-pozycja');
+                    } else if (data.reentry_info.cooldown_remaining > 0) {
+                        $('#bot-status').addClass('status-cooldown');
+                    } else {
+                        $('#bot-status').addClass('status-czuwanie');
+                    }
+
+                    if (data.in_position) {
+                        $('#no-position-info').hide();
+                        $('#position-details').show();
+                        $('#pos-symbol').text(data.state.symbol);
+                        $('#pos-side').text(data.state.side);
+                        $('#pos-quantity').text(data.state.quantity.toFixed(4));
+                        $('#pos-entry-price').text(data.state.entry_price.toFixed(4));
+                        $('#pos-current-price').text(data.current_price ? data.current_price.toFixed(4) : 'N/A');
+                        $('#pos-entry-timestamp').text(new Date(data.state.entry_timestamp).toLocaleString());
+                        $('#pos-quote-asset').text(data.quote_asset);
+
+                        $('#pos-pnl-value').text(data.pnl.value.toFixed(2));
+                        $('#pos-pnl-percent').text(data.pnl.percent.toFixed(2));
+
+                        if (data.pnl.value > 0) {
+                            $('#pos-pnl-value').removeClass('negative-pnl neutral-pnl').addClass('positive-pnl');
+                            $('#pos-pnl-percent').removeClass('negative-pnl neutral-pnl').addClass('positive-pnl');
+                        } else if (data.pnl.value < 0) {
+                            $('#pos-pnl-value').removeClass('positive-pnl neutral-pnl').addClass('negative-pnl');
+                            $('#pos-pnl-percent').removeClass('positive-pnl neutral-pnl').addClass('negative-pnl');
+                        } else {
+                            $('#pos-pnl-value').removeClass('positive-pnl negative-pnl').addClass('neutral-pnl');
+                            $('#pos-pnl-percent').removeClass('positive-pnl negative-pnl').addClass('neutral-pnl');
+                        }
+
+                        $('#pos-reentry-count').text(data.reentry_info.count);
+                        $('#pos-reentry-max-count').text(data.reentry_info.max_count);
+                        if (data.reentry_info.cooldown_remaining > 0) {
+                            $('#pos-reentry-cooldown-value').text(data.reentry_info.cooldown_remaining.toFixed(0));
+                            $('#pos-reentry-cooldown').show();
+                        } else {
+                            $('#pos-reentry-cooldown').hide();
+                        }
+
+
+                    } else {
+                        $('#no-position-info').show();
+                        $('#position-details').hide();
+                    }
+                }).fail(function() {
+                    $('#bot-status').text('Błąd ładowania statusu').removeClass().addClass('status-badge status-error');
+                    console.error("Błąd pobierania statusu bota.");
+                });
+            }
+
+            // Aktualizuj statystyki
+            function updateStatistics() {
+                $.getJSON('/?tab=stats', function(data) { // Przekazujemy parametr, aby Flask zwrócił świeże statystyki
+                    // Aktualizuj elementy statystyk
+                    $('#stats-total-pnl').text(data.stats.total_pnl.toFixed(2));
+                    $('#stats-total-positions').text(data.stats.total_positions);
+                    $('#stats-win-rate').text(data.stats.win_rate.toFixed(2) + '%');
+                    $('#stats-avg-pnl').text(data.stats.avg_pnl_per_trade.toFixed(2));
+                    $('#stats-max-profit').text(data.stats.max_profit_trade.toFixed(2));
+                    $('#stats-max-loss').text(data.stats.max_loss_trade.toFixed(2));
+                }).fail(function() {
+                    console.error("Błąd pobierania statystyk handlowych.");
+                });
+            }
+
+            // Ładowanie par USDC do selecta
+            $.getJSON('/market_data', function(data) {
+                const select = $('#trade_symbol');
+                const currentSymbol = select.val(); // Zapisz aktualnie wybrany symbol
+
+                select.empty(); // Wyczyść istniejące opcje
+
+                // Dodaj bieżący symbol jako pierwszą opcję, jeśli nie ma go na liście
+                if (!data.usdc_pairs.includes(currentSymbol)) {
+                    select.append($('<option>', {
+                        value: currentSymbol,
+                        text: currentSymbol,
+                        selected: true
+                    }));
+                }
+
+                $.each(data.usdc_pairs, function(i, symbol) {
+                    if (symbol !== currentSymbol) { // Nie dodawaj duplikatów
+                        select.append($('<option>', {
+                            value: symbol,
+                            text: symbol
+                        }));
+                    }
+                });
+                select.val(currentSymbol); // Ustaw ponownie wybrany symbol
+            }).fail(function() {
+                console.error("Błąd ładowania par USDC.");
+            });
+
+            // Obsługa formularza konfiguracji
+            $('#config-form').submit(function(e) {
+                e.preventDefault();
+                $.ajax({
+                    url: '/save_config',
+                    type: 'POST',
+                    data: $(this).serialize(),
+                    success: function(response) {
+                        alert(response.message);
+                        // Opcjonalnie przeładuj stronę lub zaktualizuj tylko status/config
+                        location.reload(); 
+                    },
+                    error: function(xhr) {
+                        alert('Błąd: ' + xhr.responseJSON.message);
+                    }
+                });
+            });
+
+            // Obsługa przycisku awaryjnego zamknięcia
+            $('#close-position-btn').click(function() {
+                if (confirm('Czy na pewno chcesz awaryjnie zamknąć pozycję?')) {
+                    $.ajax({
+                        url: '/close_position_emergency',
+                        type: 'POST',
+                        success: function(response) {
+                            alert(response.message);
+                            updateStatus(); // Odśwież status po zamknięciu
+                        },
+                        error: function(xhr) {
+                            alert('Błąd: ' + xhr.responseJSON.message);
+                        }
+                    });
+                }
+            });
+
+            // Logika wyświetlania pól TP/TS
+            $('#exit_strategy').change(function() {
+                if ($(this).val() === 'take_profit') {
+                    $('#tp_percent_group').show();
+                    $('#ts_activation_percent_group').hide();
+                    $('#ts_distance_percent_group').hide();
+                } else {
+                    $('#tp_percent_group').hide();
+                    $('#ts_activation_percent_group').show();
+                    $('#ts_distance_percent_group').show();
+                }
+            });
+
+            // Logika wyświetlania pól piramidowania
+            $('#pyramid_enabled').change(function() {
+                if ($(this).is(':checked')) {
+                    $('#pyramid_settings').show();
+                } else {
+                    $('#pyramid_settings').hide();
+                }
+            });
+
+            // Odświeżanie statusu i statystyk co 5 sekund
+            setInterval(updateStatus, 5000);
+            setInterval(updateStatistics, 10000); // Statystyki rzadziej
+
+            updateStatus(); // Pierwsze wywołanie przy ładowaniu strony
+            updateStatistics(); // Pierwsze wywołanie statystyk
+        });
+    </script>
+</body>
+</html>

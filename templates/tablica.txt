@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8" />
+    <title>Centrum Dowodzenia "Odyseja" UI 2.4</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&amp;family=Orbitron:wght@700&amp;display=swap');
+        :root { --bg-color: #121212; --surface-color: #1e1e1e; --primary-color: #00e5ff; --secondary-color: #ab82ff; --text-color: #e0e0e0; --green-glow: #b2ff59; --red-glow: #ff3d3d; }
+        body { font-family: 'Roboto', sans-serif; background-color: var(--bg-color); color: var(--text-color); margin: 0; padding: 20px; font-size: 16px; }
+        .container { max-width: 1200px; margin: auto; }
+        .header { text-align: center; border-bottom: 2px solid var(--primary-color); padding-bottom: 15px; margin-bottom: 30px; }
+        h1 { font-family: 'Orbitron', sans-serif; color: var(--primary-color); margin: 0; font-weight: 700; letter-spacing: 2px; text-shadow: 0 0 10px var(--primary-color), 0 0 20px var(--primary-color); }
+        .top-info { display: flex; justify-content: space-between; align-items: center; margin: 15px 0; }
+        .clock { font-size: 1.2rem; font-weight: 300; color: var(--secondary-color); background-color: var(--surface-color); padding: 8px 18px; border-radius: 8px; text-align: center; border: 1px solid #2a2a2a; }
+        .clock .time { font-weight: 700; font-size: 1.5rem; color: var(--primary-color); }
+        .kinga-comment { font-size: 0.9rem; font-style: italic; color: var(--secondary-color); text-align: center; margin-top: 5px; }
+        .section { background-color: var(--surface-color); border-radius: 12px; padding: 25px; margin-bottom: 30px; box-shadow: 0 0 15px rgba(0, 229, 255, 0.1); border: 1px solid #2a2a2a; }
+        h2 { color: var(--primary-color); margin-top: 0; margin-bottom: 20px; border-bottom: 1px solid #333; padding-bottom: 10px; font-weight: 400; }
+        .grid-container { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; }
+        .status-box { text-align: center; padding: 20px; border-radius: 8px; }
+        .status-box .label { font-size: 0.9rem; opacity: 0.7; margin-bottom: 10px; }
+        .status-box .value { font-size: 2rem; font-weight: 700; }
+        .status-idle { background-color: #4a4a4a; }
+        .status-active { background: linear-gradient(145deg, #005f6b, #003c44); }
+        .status-pnl-positive { color: var(--green-glow); text-shadow: 0 0 8px var(--green-glow); }
+        .status-pnl-negative { color: var(--red-glow); text-shadow: 0 0 8px var(--red-glow); }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔥 Centrum Dowodzenia "Odyseja" UI 2.4 🔥</h1>
+            <div class="top-info">
+                 <div id="kinga-comment" class="kinga-comment">Inicjalizuję systemy...</div>
+                 <div id="clock" class="clock"><div class="time">--:--:--</div></div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <div class="grid-container">
+                <div id="status-box" class="status-box status-idle"><div class="label">STATUS SYSTEMU</div><div id="status-text" class="value">ŁADOWANIE...</div></div>
+                <div class="status-box"><div class="label">SALDO KONTA</div><div id="balance-value" class="value" style="color: var(--green-glow);">--.-- USDC</div></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function updateDashboard() {
+            try {
+                const response = await fetch('/status');
+                if (!response.ok) throw new Error(`Błąd sieciowy: ${response.status}`);
+                const data = await response.json();
+
+                document.getElementById('status-text').textContent = data.status_text;
+                document.getElementById('balance-value').textContent = `${data.balance} ${data.quote_asset}`;
+                
+                const statusBox = document.getElementById('status-box');
+                statusBox.className = 'status-box';
+                statusBox.classList.add(data.in_position ? 'status-active' : 'status-idle');
+                
+            } catch (error) {
+                document.getElementById('status-text').textContent = "BŁĄD POŁĄCZENIA";
+                console.error("Błąd odświeżania:", error);
+            }
+        }
+
+        function updateClock() {
+            const now = new Date();
+            const timeEl = document.querySelector('#clock .time');
+            if(timeEl) timeEl.textContent = now.toLocaleTimeString('pl-PL');
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            updateDashboard();
+            setInterval(updateDashboard, 5000);
+            setInterval(updateClock, 1000);
+        });
+    </script>
+</body>
+</html>
+

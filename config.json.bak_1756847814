@@ -1,0 +1,17 @@
+{
+    "api_key": "GD0qobaX2qXTlLRsLVL5bG3MjchxpzGYfNAJU2ur4jdIlxMnSPnI5hNmkqCUlqrK",
+    "secret_key": "SEMeQk0O5JndycpvDB0mdOaHdSaTnPr0XMIBoF42FLSn9e3wIFJEViBVX0aER2ED",
+    "trade_symbol": "WLDUSDC",
+    "quote_asset": "USDC",
+    "base_asset": "WLD",
+    "dashboard_user": "matik",
+    "dashboard_pass": "$Gmatik80r",
+    "exit_strategy": "take_profit",
+    "position_size_percent": 20.0,
+    "sl_percent": 1.0,
+    "tp_percent": 1.0,
+    "reentry_enabled": false,
+    "reentry_max_count": 0,
+    "reentry_cooldown_seconds": 60,
+    "trailing_stop_callback_rate": 1.0
+}

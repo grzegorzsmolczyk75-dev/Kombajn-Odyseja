@@ -1,0 +1,395 @@
+import os
+import sys
+import hmac
+import hashlib
+import time
+import urllib.parse
+import requests
+import json
+import logging
+import threading
+import csv
+import subprocess
+from decimal import Decimal, getcontext, ROUND_DOWN
+from datetime import datetime
+from flask import Flask, request, render_template, jsonify, flash, redirect, url_for
+from flask_basicauth import BasicAuth
+
+logging.basicConfig(level=logging.INFO, stream=sys.stdout,
+                    format='%(asctime)s - %(levelname)s - %(message)s')
+
+CONFIG_FILE = "config.json"
+STATE_FILE = "state.json"
+HISTORY_FILE = "trades_history.csv"
+
+getcontext().prec = 18
+monitoring_active = threading.Event()
+
+def load_config():
+    try:
+        with open(CONFIG_FILE) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        logging.critical("!!! BŁĄD KRYTYCZNY: Nie znaleziono pliku config.json! Bot nie może kontynuować pracy.")
+        sys.exit(1)
+    except json.JSONDecodeError:
+        logging.critical("!!! BŁĄD KRYTYCZNY: Plik config.json jest uszkodzony! Bot nie może kontynuować pracy.")
+        sys.exit(1)
+
+config = load_config()
+API_KEY = config.get("api_key")
+SECRET_KEY = config.get("secret_key")
+QUOTE_ASSET = config.get("quote_asset")
+
+def load_state():
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, 'r') as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            return {"in_position": False}
+    return {"in_position": False}
+
+def save_state(state):
+    with open(STATE_FILE, 'w') as f:
+        json.dump(state, f, indent=4)
+
+def send_request(method, path, params={}, signed=False, margin=False):
+    base_url = "https://api.binance.com"
+    api_path = f"/sapi/v1/margin{path}" if margin else f"/api/v3{path}"
+    headers = {'X-MBX-APIKEY': API_KEY}
+    params = {k: v for k, v in params.items() if v is not None}
+
+    max_retries = 3
+    for attempt in range(max_retries):
+        if signed:
+            params['timestamp'] = int(time.time() * 1000)
+            query_string = urllib.parse.urlencode(params)
+            signature = hmac.new(SECRET_KEY.encode('utf-8'), msg=query_string.encode('utf-8'), digestmod=hashlib.sha256).hexdigest()
+            url = f"{base_url}{api_path}?{query_string}&signature={signature}"
+        else:
+            query_string = urllib.parse.urlencode(params)
+            url = f"{base_url}{api_path}?{query_string}"
+
+        try:
+            if method.upper() == 'DELETE':
+                response = requests.delete(url, headers=headers)
+            else:
+                response = requests.request(method, url, headers=headers)
+            response.raise_for_status()
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if response.status_code == 401 and attempt < max_retries - 1:
+                logging.warning(f"HTTP 401 Error, próba ponowienia {attempt + 1}/{max_retries}...")
+                time.sleep(1)
+                continue
+            logging.error(f"!!! BŁĄD HTTP: Status={e.response.status_code}, Odpowiedź={e.response.text}")
+            break
+        except requests.exceptions.RequestException as e:
+            logging.error(f"!!! BŁĄD KOMUNIKACJI: {e}")
+            break
+    return None
+
+def format_number(n): 
+    return f"{Decimal(n).normalize():f}"
+
+def get_precision_data(symbol):
+    exchange_info = send_request('GET', '/exchangeInfo', {'symbol': symbol})
+    if not (exchange_info and 'symbols' in exchange_info): return None
+    symbol_info = next((s for s in exchange_info['symbols'] if s['symbol'] == symbol), None)
+    if not symbol_info: return None
+    precision = {}
+    for f in symbol_info['filters']:
+        if f['filterType'] == 'PRICE_FILTER': precision['TICK_SIZE'] = Decimal(f['tickSize'])
+        if f['filterType'] == 'LOT_SIZE': precision['STEP_SIZE'] = Decimal(f['stepSize'])
+    return precision if 'TICK_SIZE' in precision and 'STEP_SIZE' in precision else None
+
+def get_margin_balance(asset):
+    margin_account = send_request('GET', '/account', {}, signed=True, margin=True)
+    if not (margin_account and 'userAssets' in margin_account): return Decimal('0')
+    asset_info = next((a for a in margin_account['userAssets'] if a['asset'] == asset), None)
+    return Decimal(asset_info['free']) if asset_info else Decimal('0')
+
+def get_current_price(symbol):
+    ticker = send_request('GET', '/ticker/price', {'symbol': symbol})
+    return Decimal(ticker['price']) if ticker and 'price' in ticker else None
+
+def get_debt(asset):
+    margin_account = send_request('GET', '/account', {}, signed=True, margin=True)
+    if not (margin_account and 'userAssets' in margin_account): return Decimal('0')
+    asset_info = next((a for a in margin_account['userAssets'] if a['asset'] == asset), None)
+    return Decimal(asset_info['borrowed']) if asset_info else Decimal('0')
+
+def place_stop_loss_order(symbol, side, quantity, stop_price, precision):
+    tick_size = precision['TICK_SIZE']
+    stop_price_formatted = (stop_price / tick_size).quantize(Decimal('1'), rounding=ROUND_DOWN) * tick_size
+    limit_price = stop_price_formatted * (Decimal('0.995') if side == 'SELL' else Decimal('1.005'))  # 0.5% "poślizgu"
+    limit_price_formatted = (limit_price / tick_size).quantize(Decimal('1'), rounding=ROUND_DOWN) * tick_size
+    sl_params = {'symbol': symbol, 'side': side, 'type': 'STOP_LOSS_LIMIT', 'quantity': format_number(quantity),
+                 'stopPrice': format_number(stop_price_formatted), 'price': format_number(limit_price_formatted), 'timeInForce': 'GTC'}
+    logging.info(f"--- Ustawiam SL: {sl_params}")
+    sl_response = send_request('POST', '/order', sl_params, signed=True, margin=True)
+    if sl_response and 'orderId' in sl_response:
+        logging.info(f">>> SUKCES! SL ustawiony [ID: {sl_response['orderId']}]")
+        return sl_response['orderId']
+    else:
+        logging.critical("!!! BŁĄD KRYTYCZNY: Nie udało się ustawić zlecenia SL!")
+        return None
+
+def cancel_order(symbol, order_id):
+    logging.info(f"--- Anuluję zlecenie [ID: {order_id}]...")
+    cancel_params = {'symbol': symbol, 'orderId': order_id}
+    cancel_response = send_request('DELETE', '/order', cancel_params, signed=True, margin=True)
+    if cancel_response:
+        logging.info("--- SUKCES! Zlecenie anulowane.")
+    else:
+        logging.warning(f"--- OSTRZEŻENIE: Nie udało się anulować zlecenia [ID: {order_id}].")
+    return cancel_response is not None
+
+def price_monitor():
+    logging.info(">>> Wątek 'Sokole Oko' AKTYWOWANY <<<")
+    while monitoring_active.is_set():
+        try:
+            state = load_state()
+            if not state.get("in_position"):
+                logging.warning("Sokole Oko: Brak aktywnej pozycji.")
+                monitoring_active.clear()
+                break
+            symbol, side, entry_price = state['symbol'], state['side'], Decimal(state['entry_price'])
+            current_price = get_current_price(symbol)
+            if not current_price:
+                logging.error("Sokole Oko: Błąd pobrania ceny.")
+                time.sleep(10)
+                continue
+            if state.get("exit_strategy") == "take_profit":
+                tp_price = Decimal(state['take_profit_price'])
+                logging.info(f"[Sokole Oko][TP] Cel: {tp_price:.4f} | Cena: {current_price:.4f}")
+                if (side == 'long' and current_price >= tp_price) or (side == 'short' and current_price <= tp_price):
+                    logging.info("$$$ SOKOLE OKO (TP): CEL OSIĄGNIĘTY! Zamykam pozycję... $$$")
+                    close_position(state, get_precision_data(symbol), exit_price=current_price, exit_reason="Take Profit")
+                    break
+            time.sleep(5)
+        except Exception as e:
+            logging.error(f"!!! BŁĄD w wątku Sokole Oko: {e}", exc_info=True)
+            time.sleep(30)
+    logging.info(">>> Wątek 'Sokole Oko' ZAKOŃCZONY <<<")
+
+def start_monitoring_thread():
+    if not monitoring_active.is_set():
+        monitoring_active.set()
+        thread = threading.Thread(target=price_monitor)
+        thread.daemon = True
+        thread.start()
+
+def open_long_position(symbol, precision):
+    logging.info(f">>> OTWIERAM LONG na {symbol}")
+    usdc_balance = get_margin_balance(QUOTE_ASSET)
+    current_price = get_current_price(symbol)
+    if usdc_balance <= 10 or not current_price:
+        logging.error("Za mało środków lub problem z ceną.")
+        return
+    investment = usdc_balance * (Decimal(config.get("position_size_percent", 50)) / Decimal('100'))
+    step = precision['STEP_SIZE']
+    qty = (investment / current_price / step).quantize(Decimal('1'), rounding=ROUND_DOWN) * step
+    buy_params = {'symbol': symbol, 'side': 'BUY', 'type': 'MARKET', 'quantity': format_number(qty), 'sideEffectType': 'MARGIN_BUY'}
+    logging.info(f"Składam zlecenie BUY: {buy_params}")
+    buy_response = send_request('POST', '/order', buy_params, signed=True, margin=True)
+    if not (buy_response and 'orderId' in buy_response):
+        logging.error("Błąd otwarcia LONG")
+        return
+    time.sleep(2)
+    entry_price = get_current_price(symbol)
+    sl_price = entry_price * (Decimal('1') - (Decimal(config.get("sl_percent", 2)) / Decimal('100')))
+    sl_order_id = place_stop_loss_order(symbol, 'SELL', qty, sl_price, precision)
+    new_state = {"in_position": True, "symbol": symbol, "side": "long", "entry_price": str(entry_price), "quantity": str(qty),
+                 "stop_loss_id": sl_order_id, "exit_strategy": config.get("exit_strategy", "take_profit")}
+    if new_state["exit_strategy"] == "take_profit":
+        new_state["take_profit_price"] = str(entry_price * (Decimal('1') + (Decimal(config.get("tp_percent", 5)) / Decimal('100'))))
+    save_state(new_state)
+    start_monitoring_thread()
+
+def open_short_position(symbol, precision):
+    logging.info(f">>> OTWIERAM SHORT na {symbol}")
+    usdc_balance = get_margin_balance(QUOTE_ASSET)
+    current_price = get_current_price(symbol)
+    if usdc_balance <= 10 or not current_price:
+        logging.error("Za mało środków lub problem z ceną.")
+        return
+
+    investment = usdc_balance * (Decimal(config.get("position_size_percent", 50)) / Decimal('100'))
+    step = precision['STEP_SIZE']
+    qty = (investment / current_price / step).quantize(Decimal('1'), rounding=ROUND_DOWN) * step
+
+    # Oczekiwanie na spłatę długu przed kolejną pożyczką short
+    max_wait_cycles = 30
+    for i in range(max_wait_cycles):
+        debt = get_debt(symbol.replace(QUOTE_ASSET, ''))
+        if debt == 0:
+            break
+        logging.info(f"Oczekiwanie na spłatę długu... cykl {i+1}/{max_wait_cycles}")
+        time.sleep(0.5)
+    else:
+        logging.error("Debt nie został spłacony w czasie, abortuję otwarcie SHORT.")
+        return
+
+    loan_params = {'asset': symbol.replace(QUOTE_ASSET, ''), 'amount': format_number(qty)}
+    loan_response = send_request('POST', '/loan', loan_params, signed=True, margin=True)
+    if not (loan_response and 'tranId' in loan_response):
+        logging.error("Błąd pożyczki short")
+        return
+    logging.info(f"Pożyczka udana [ID: {loan_response['tranId']}]")
+    time.sleep(2)
+
+    sell_params = {'symbol': symbol, 'side': 'SELL', 'type': 'MARKET', 'quantity': format_number(qty), 'sideEffectType': 'NO_SIDE_EFFECT'}
+    logging.info(f"Składam zlecenie SELL: {sell_params}")
+    sell_response = send_request('POST', '/order', sell_params, signed=True, margin=True)
+    if not (sell_response and 'orderId' in sell_response):
+        logging.error("Błąd sprzedaży short")
+        return
+    logging.info(f"Zlecenie sprzedaży przyjęte [ID: {sell_response['orderId']}]")
+    time.sleep(2)
+
+    entry_price = get_current_price(symbol)
+    sl_price = entry_price * (Decimal('1') + (Decimal(config.get("sl_percent", 2)) / Decimal('100')))
+    sl_order_id = place_stop_loss_order(symbol, 'BUY', qty, sl_price, precision)
+    new_state = {"in_position": True, "symbol": symbol, "side": "short", "entry_price": str(entry_price), "quantity": str(qty),
+                 "stop_loss_id": sl_order_id, "exit_strategy": config.get("exit_strategy", "take_profit")}
+    if new_state["exit_strategy"] == "take_profit":
+        new_state["take_profit_price"] = str(entry_price * (Decimal('1') - (Decimal(config.get("tp_percent", 5)) / Decimal('100'))))
+    save_state(new_state)
+    start_monitoring_thread()
+
+def close_position(state, precision, exit_price=None, exit_reason="N/A"):
+    monitoring_active.clear()
+    time.sleep(1)
+    symbol = state['symbol']
+    side = state['side']
+    stop_loss_id = state.get('stop_loss_id')
+    quantity = Decimal(state['quantity'])
+    entry_price = Decimal(state['entry_price'])
+    entry_timestamp = state.get('entry_timestamp', time.time())
+
+    logging.info(f">>> ZAMYKAM POZYCJĘ {side.upper()} dla {symbol}")
+    if stop_loss_id:
+        cancel_order(symbol, stop_loss_id)
+    close_side = 'BUY' if side == 'short' else 'SELL'
+    close_params = {'symbol': symbol, 'side': close_side, 'type': 'MARKET', 'quantity': format_number(quantity), 'sideEffectType': 'AUTO_REPAY'}
+    logging.info(f"Składam zlecenie zamknięcia: {close_params}")
+    close_response = send_request('POST', '/order', close_params, signed=True, margin=True)
+
+    if not (close_response and 'orderId' in close_response):
+        logging.critical("!!! BŁĄD: Nie udało się zamknąć pozycji!")
+        return
+
+    final_exit_price = exit_price if exit_price else get_current_price(symbol)
+    logging.info(f"Zlecenie zamknięcia przyjęte [ID: {close_response['orderId']}]")
+    log_trade_history(symbol, side, quantity, entry_price, final_exit_price, entry_timestamp, time.time(), exit_reason)
+    save_state({"in_position": False})
+    logging.info("Stan zresetowany")
+
+app = Flask('bot')
+app.secret_key = os.urandom(24)
+cfg_for_auth = load_config()
+app.config['BASIC_AUTH_USERNAME'] = cfg_for_auth.get('dashboard_user', 'admin')
+app.config['BASIC_AUTH_PASSWORD'] = cfg_for_auth.get('dashboard_pass', 'password')
+basic_auth = BasicAuth(app)
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    try:
+        data = json.loads(request.data)
+    except json.JSONDecodeError:
+        logging.error("Niepoprawny JSON w webhooku.")
+        return "Błędny format danych", 400
+
+    current_config = load_config()
+    active_trade_symbol = current_config.get('trade_symbol')
+    logging.info(f"Otrzymano alert: {data} dla pary {active_trade_symbol}")
+    state = load_state()
+    action = data.get('action')
+    precision = get_precision_data(active_trade_symbol)
+
+    if not precision:
+        logging.error(f"Błąd precyzji dla {active_trade_symbol}")
+        return "Błąd precyzji", 500
+
+    if not state.get("in_position"):
+        if action == 'buy':
+            open_long_position(active_trade_symbol, precision)
+        elif action == 'sell':
+            open_short_position(active_trade_symbol, precision)
+    else:
+        current_side = state.get("side")
+        if (action == 'buy' and current_side == 'short') or (action == 'sell' and current_side == 'long'):
+            logging.info(f"Sygnał przeciwny. Zamykam '{current_side}' i otwieram '{action}'")
+            close_position(state, precision, exit_reason="Sygnał przeciwny")
+            time.sleep(3)
+            if action == 'buy':
+                open_long_position(active_trade_symbol, precision)
+            elif action == 'sell':
+                open_short_position(active_trade_symbol, precision)
+        else:
+            logging.info(f"Sygnał '{action}' zgodny z pozycją '{current_side}'. Ignoruję.")
+
+    return "Webhook przetworzony.", 200
+
+@app.route('/')
+@basic_auth.required
+def dashboard():
+    state = load_state()
+    current_config = load_config()
+    balance = get_margin_balance(current_config.get('quote_asset'))
+    history = []
+    if os.path.exists(HISTORY_FILE):
+        with open(HISTORY_FILE, 'r') as f:
+            reader = csv.DictReader(f)
+            history = sorted(list(reader), key=lambda x: x['exit_timestamp'], reverse=True)
+    return render_template('dashboard.html', state=state, balance=balance, history=history, quote_asset=current_config.get('quote_asset'), config=current_config)
+
+@app.route('/save_config', methods=['POST'])
+@basic_auth.required
+def save_config_route():
+    try:
+        current_config = load_config()
+        form_data = request.form
+        new_symbol = form_data.get('trade_symbol')
+        current_config['trade_symbol'] = new_symbol
+        current_config['base_asset'] = new_symbol.replace(current_config.get('quote_asset'), '')
+        current_config['exit_strategy'] = form_data.get('exit_strategy')
+        current_config['position_size_percent'] = float(form_data.get('position_size_percent'))
+        current_config['sl_percent'] = float(form_data.get('sl_percent'))
+        if 'tp_percent' in form_data:
+            current_config['tp_percent'] = float(form_data['tp_percent'])
+        if 'ts_activation_percent' in form_data:
+            current_config['ts_activation_percent'] = float(form_data['ts_activation_percent'])
+        if 'ts_distance_percent' in form_data:
+            current_config['ts_distance_percent'] = float(form_data['ts_distance_percent'])
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(current_config, f, indent=4)
+        flash('Konfiguracja zapisana. Restartuję bota, aby zastosować zmiany...', 'success')
+        def restart_bot():
+            time.sleep(2)
+            logging.info("--- Restartuję kinga_bot.service ---")
+            subprocess.run(["sudo", "systemctl", "restart", "kinga_bot.service"])
+        restart_thread = threading.Thread(target=restart_bot)
+        restart_thread.start()
+    except Exception as e:
+        flash(f'Błąd zapisu konfiguracji: {e}', 'error')
+        logging.error(f"Błąd zapisu konfiguracji: {e}", exc_info=True)
+    return redirect(url_for('dashboard'))
+
+
+if __name__ == '__main__':
+    loaded_config = load_config()
+    logging.info("=" * 50)
+    logging.info(f">>> Uruchamiam Bota Handlowego - Wersja {loaded_config.get('version', 'N/A')} <<<")
+    logging.info(f">>> Cel: {loaded_config.get('trade_symbol')} <<<")
+    logging.info("=" * 50)
+    if load_state().get("in_position"):
+        logging.info("Wykryto aktywną pozycję. Uruchamiam 'Sokole Oko'.")
+        start_monitoring_thread()
+
+    from waitress import serve
+    serve(app, host='0.0.0.0', port=5000)
+

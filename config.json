@@ -1,0 +1,22 @@
+{
+    "api_key": "hzdYJbLTaGKoj6wlzSyVjAV55s6XXJzUr05D78Fl0o2WQPrze020kfba7cPpl2PD",
+    "secret_key": "srhtg3khc12HrFu7LUjMu3CiCqoFcImzh8wE01XJ8dOpCAkLmTFXIUKK8Rw4XcNh",
+    "dashboard_user": "admin",
+    "dashboard_pass": "1234",
+    "service_name": "bot.service",
+    "quote_asset": "USDC",
+    "trade_symbol": "WLDUSDC",
+    "position_size_percent": 20.0,
+    "sl_percent": 2.0,
+    "exit_strategy": "take_profit",
+    "tp_percent": 0.2,
+    "ts_activation_percent": 0.5,
+    "ts_distance_percent": 1.0,
+    "reentry_enabled": true,
+    "reentry_max_count": 3,
+    "reentry_cooldown_seconds": 5,
+    "pyramid_enabled": false,
+    "pyramid_trigger_percent": 1.5,
+    "pyramid_step_size_percent_of_initial": 50.0,
+    "pyramid_max_steps": 3
+}

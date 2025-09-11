@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Centrum Dowodzenia "Kombajn"</title>
+    <!-- OSTATECZNA POPRAWKA STYLU PRZYCISKU -->
+    <style>
+        .save-button:disabled {
+            background-color: #bb86fc !important;
+            cursor: pointer !important;
+            opacity: 1 !important;
+        }
+    </style>
+    <!-- KONIEC POPRAWKI -->
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: #121212; color: #e0e0e0; margin: 0; padding: 20px; }
+        .container { max-width: 1200px; margin: auto; }
+        .header { text-align: center; margin-bottom: 30px; }
+        .header h1 { color: #bb86fc; font-size: 2.5em; }
+        .grid-container { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 20px; }
+        .panel { background-color: #1e1e1e; border-radius: 8px; padding: 20px; box-shadow: 0 4px 8px rgba(0,0,0,0.2); }
+        .panel h2 { margin-top: 0; color: #03dac6; border-bottom: 2px solid #03dac6; padding-bottom: 10px; }
+        .status-grid { display: grid; grid-template-columns: auto 1fr; gap: 10px 20px; align-items: center; }
+        .status-grid strong { color: #bb86fc; text-align: right; }
+        .status-in-position { color: #28a745; font-weight: bold; }
+        .status-no-position { color: #dc3545; font-weight: bold; font-size: 1.2em; text-align: center;}
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #333; }
+        th { background-color: #333; color: #03dac6; }
+        tr:hover { background-color: #2a2a2a; }
+        .profit { color: #28a745; }
+        .loss { color: #dc3545; }
+        .input-field, select { width: 100%; padding: 8px; margin-top: 5px; background-color: #333; border: 1px solid #555; color: #e0e0e0; border-radius: 4px; box-sizing: border-box; }
+        .form-row { display: flex; gap: 20px; margin-bottom: 15px; flex-wrap: wrap; }
+        .form-group { flex: 1; min-width: 250px; }
+        .save-button { background-color: #bb86fc; color: #121212; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-weight: bold; width: 100%; margin-top: 10px;}
+        .save-button:hover { background-color: #a76ff0; }
+        /* Poniższa reguła jest teraz nadpisywana przez naszą poprawkę */
+        .save-button:disabled { background-color: #555; cursor: not-allowed; }
+        hr.separator { border: 0; height: 1px; background-image: linear-gradient(to right, rgba(0, 0, 0, 0), rgba(51, 51, 51, 0.75), rgba(0, 0, 0, 0)); margin: 30px 0; }
+        .form-check-input { margin-right: 10px; vertical-align: middle; transform: scale(1.2); }
+        .form-check-label { vertical-align: middle; }
+        .flash-success { padding: 15px; margin-bottom: 20px; border: 1px solid transparent; border-radius: 4px; color: #155724; background-color: #d4edda; border-color: #c3e6cb; }
+        .flash-error { padding: 15px; margin-bottom: 20px; border: 1px solid transparent; border-radius: 4px; color: #721c24; background-color: #f8d7da; border-color: #f5c6cb; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🛠 Centrum Dowodzenia "Kombajn"</h1>
+        </div>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="flash-{{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+        <div class="grid-container">
+            <div class="panel">
+                <h2>Status Operacyjny</h2>
+                {% if state.in_position %}
+                    <div class="status-grid">
+                        <strong>Status:</strong> <span class="status-in-position">W POZYCJI</span>
+                        <strong>Symbol:</strong> <span>{{ state.symbol }}</span>
+                        <strong>Strona:</strong> <span>{{ state.side.upper() }}</span>
+                        <strong>Cena Wejścia:</strong> <span>{{ "%.4f"|format(state.entry_price|float) }}</span>
+                        <strong>Ilość:</strong> <span>{{ "%.5f"|format(state.quantity|float) }}</span>
+                        <strong>Strategia Wyjścia:</strong> <span>{{ state.exit_strategy }}</span>
+                        {% if state.take_profit_price %}
+                            <strong>Cel (Take Profit):</strong> <span>{{ "%.4f"|format(state.take_profit_price|float) }}</span>
+                        {% endif %}
+                        {% if state.stop_loss_price %}
+                            <strong>Zabezp. (Stop Loss):</strong> <span>{{ "%.4f"|format(state.stop_loss_price|float) }}</span>
+                        {% endif %}
+                        {% if state.reentry_count > 0 %}
+                            <strong>Ciągłość Ognia:</strong> <span>Aktywne odnowienie: {{ state.reentry_count }} z {{ config.get('reentry_max_count') }}</span>
+                        {% endif %}
+                    </div>
+                {% else %}
+                    <p class="status-no-position">Status: OCZEKIWANIE NA SYGNAŁ</p>
+                {% endif %}
+            </div>
+            <div class="panel">
+                <h2>Saldo Konta</h2>
+                <p style="font-size: 2em; color: #fff; text-align: center;">{{ "%.2f"|format(balance|float) }} {{ config.get('quote_asset') }}</p>
+            </div>
+        </div>
+        <div class="panel" style="margin-top: 20px;">
+            <h2>Panel Ustawień</h2>
+            <form action="/save_config" method="post">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="trade_symbol">Aktywna Para Handlowa</label>
+                        <input type="text" id="trade_symbol" name="trade_symbol" value="{{ config.get('trade_symbol', 'WLDUSDC') }}" class="input-field">
+                    </div>
+                    <div class="form-group">
+                        <label for="exit_strategy">Typ Strategii Wyjścia</label>
+                        <select id="exit_strategy" name="exit_strategy" class="input-field">
+                            <option value="take_profit" {% if config.get('exit_strategy') == 'take_profit' %}selected{% endif %}>Take Profit (Stały cel)</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="position_size_percent">Wielkość Pozycji (% kapitału)</label>
+                        <input type="number" step="0.1" id="position_size_percent" name="position_size_percent" value="{{ config.get('position_size_percent', 1.0) }}" class="input-field">
+                    </div>
+                    <div class="form-group">
+                        <label for="sl_percent">Stop Loss (%)</label>
+                        <input type="number" step="0.1" id="sl_percent" name="sl_percent" value="{{ config.get('sl_percent', 1.0) }}" class="input-field">
+                    </div>
+                    <div class="form-group">
+                        <label for="tp_percent">Take Profit (%)</label>
+                        <input type="number" step="0.1" id="tp_percent" name="tp_percent" value="{{ config.get('tp_percent', 1.0) }}" class="input-field">
+                    </div>
+                </div>
+                <hr class="separator">
+                <h4>Operacja "Ciągłość Ognia"</h4>
+                <div class="form-group">
+                    <input type="checkbox" class="form-check-input" id="reentry_enabled" name="reentry_enabled" {% if config.get('reentry_enabled') %}checked{% endif %}>
+                    <label class="form-check-label" for="reentry_enabled">Włącz automatyczne odnawianie pozycji po TP</label>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="reentry_max_count">Maks. Liczba Odnowień</label>
+                        <input type="number" id="reentry_max_count" name="reentry_max_count" value="{{ config.get('reentry_max_count', 3) }}" class="input-field">
+                    </div>
+                    <div class="form-group">
+                        <label for="reentry_cooldown_seconds">Okres Wyciszenia (s)</label>
+                        <input type="number" id="reentry_cooldown_seconds" name="reentry_cooldown_seconds" value="{{ config.get('reentry_cooldown_seconds', 60) }}" class="input-field">
+                    </div>
+                </div>
+                <button type="submit" class="save-button" {% if state.in_position %}disabled{% endif %}>Zapisz i Zrestartuj Bota</button>
+            </form>
+        </div>
+        <div class="panel" style="margin-top: 20px;">
+            <h2>Kronika Bitew</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Czas Wyjścia</th>
+                        <th>Czas Trwania</th>
+                        <th>Symbol</th>
+                        <th>Strona</th>
+                        <th>Ilość</th>
+                        <th>Cena Wej./Wyj.</th>
+                        <th>Powód Wyjścia</th>
+                        <th>PnL ({{ quote_asset }})</th>
+                        <th>PnL (%)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for trade in history|sort(attribute='exit_timestamp', reverse=true) %}
+                    <tr class="{% if trade.pnl_quote|float >= 0 %}profit{% else %}loss{% endif %}">
+                        <td>{{ trade.exit_timestamp }}</td>
+                        <td>{{ trade.duration }}</td>
+                        <td>{{ trade.symbol }}</td>
+                        <td>{{ trade.side.upper() }}</td>
+                        <td>{{ "%.5f"|format(trade.quantity|float) }}</td>
+                        <td>{{ "%.4f"|format(trade.entry_price|float) }} / {{ "%.4f"|format(trade.exit_price|float) }}</td>
+                        <td>{{ trade.exit_reason }}</td>
+                        <td class="{% if trade.pnl_quote|float >= 0 %}profit{% else %}loss{% endif %}">{{ "%.4f"|format(trade.pnl_quote|float) }}</td>
+                        <td class="{% if trade.pnl_quote|float >= 0 %}profit{% else %}loss{% endif %}">{{ trade.pnl_percent }}</td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="9" style="text-align: center;">Brak zapisanych transakcji.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</body>
+</html>
+

@@ -1,0 +1,294 @@
+import os
+import sys
+import hmac
+import hashlib
+import time
+import requests
+import json
+import logging
+import threading
+import csv
+import subprocess
+import math
+from decimal import Decimal, getcontext
+from datetime import datetime
+from flask import Flask, request, render_template, jsonify, flash, redirect, url_for
+from flask_basicauth import BasicAuth
+from waitress import serve
+
+# ==============================================================================
+#   Projekt "Kombajn" | Wersja 16.1 "Niezawodna Kontynuacja"
+#   Data: 03.09.2025
+#   Kluczowe: BasicAuth ładowany po load_config()
+# ==============================================================================
+
+logging.basicConfig(
+    level=logging.INFO,
+    stream=sys.stdout,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+
+CONFIG_FILE = "config.json"
+STATE_FILE = "state.json"
+HISTORY_FILE = "trades_history.csv"
+state_lock = threading.Lock()
+sokole_oko_active = threading.Event()
+getcontext().prec = 18
+
+def load_config():
+    try:
+        with open(CONFIG_FILE,'r') as f:
+            return json.load(f)
+    except Exception as e:
+        logging.critical(f"BŁĄD: Nie można wczytać config.json: {e}")
+        sys.exit(1)
+
+def load_state():
+    with state_lock:
+        default = {
+            "in_position": False, "symbol": "", "side": "",
+            "entry_price": 0, "quantity": 0, "exit_strategy": "",
+            "take_profit_price": None, "stop_loss_price": None,
+            "reentry_count": 0, "last_reentry": 0
+        }
+        if not os.path.exists(STATE_FILE):
+            return default
+        try:
+            st = json.load(open(STATE_FILE))
+            for k,v in default.items():
+                st.setdefault(k,v)
+            return st
+        except:
+            return default
+
+def save_state(state):
+    with state_lock:
+        with open(STATE_FILE,'w') as f:
+            json.dump(state,f,indent=4)
+
+# Flask + BasicAuth
+app = Flask("bot")
+cfg = load_config()
+app.config['BASIC_AUTH_USERNAME'] = cfg.get('dashboard_user','admin')
+app.config['BASIC_AUTH_PASSWORD'] = cfg.get('dashboard_pass','changeme')
+basic_auth = BasicAuth(app)
+
+API_KEY = cfg.get("api_key")
+SECRET_KEY = cfg.get("secret_key")
+QUOTE_ASSET = cfg.get("quote_asset","USDC")
+
+def sync_time():
+    try:
+        r = requests.get("https://fapi.binance.com/fapi/v1/time",timeout=5)
+        return int(r.json().get("serverTime", time.time()*1000))
+    except:
+        return int(time.time()*1000)
+
+def send_request(method,path,params=None,signed=False):
+    if params is None: params = {}
+    url = "https://fapi.binance.com" + path
+    headers = {"X-MBX-APIKEY": API_KEY}
+    if signed:
+        params['timestamp'] = sync_time()
+        params['recvWindow'] = 5000
+        query = "&".join(f"{k}={params[k]}" for k in sorted(params))
+        params['signature'] = hmac.new(
+            SECRET_KEY.encode(), query.encode(), hashlib.sha256
+        ).hexdigest()
+    try:
+        resp = requests.request(method,url,headers=headers,params=params,timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.RequestException as e:
+        logging.error(f"API Binance error {e} | {getattr(e.response,'text','')}")
+        return {"error": str(e)}
+
+def get_symbol_info(sym):
+    info = send_request('GET','/fapi/v1/exchangeInfo')
+    if isinstance(info,dict) and 'symbols' in info:
+        for s in info['symbols']:
+            if s['symbol']==sym:
+                return s
+    return None
+
+def get_futures_balance(asset):
+    res = send_request('GET','/fapi/v2/account',signed=True)
+    if isinstance(res,dict) and 'assets' in res:
+        for a in res['assets']:
+            if a['asset']==asset:
+                return Decimal(a.get('availableBalance','0'))
+    return Decimal('0')
+
+def place_order(side,symbol,quantity):
+    return send_request("POST","/fapi/v1/order",
+        params={"symbol":symbol,"side":side,"type":"MARKET","quantity":quantity},
+        signed=True)
+
+def close_position(sym,side,qty):
+    opp = "SELL" if side.upper()=="BUY" else "BUY"
+    return send_request("POST","/fapi/v1/order",
+        params={"symbol":sym,"side":opp,"type":"MARKET",
+                "quantity":qty,"reduceOnly":True},
+        signed=True)
+
+def open_position(side,symbol):
+    bal = get_futures_balance(QUOTE_ASSET)
+    info = get_symbol_info(symbol)
+    if bal<=0 or not info:
+        logging.error("Brak salda lub info o symbolu.")
+        return False
+    lev = int(cfg.get("leverage",1))
+    pct = Decimal(cfg.get("position_size_percent",1))/100
+    val = bal*lev*pct
+    price = Decimal(send_request('GET','/fapi/v1/ticker/price',
+                 params={"symbol":symbol})['price'])
+    qty = (val/price).quantize(Decimal('1e-'+str(info['quantityPrecision'])))
+    if qty<=0:
+        logging.error("Qty za małe.")
+        return False
+    res = place_order(side,symbol,qty)
+    if 'orderId' in res:
+        time.sleep(1)
+        q = send_request('GET','/fapi/v1/order',
+            params={"symbol":symbol,"orderId":res['orderId']},signed=True)
+        if q.get('status')=="FILLED":
+            ep = Decimal(q['avgPrice'])
+            state = {
+                "in_position": True,
+                "symbol": symbol,
+                "side": side,
+                "entry_price": float(ep),
+                "quantity": float(qty),
+                "exit_strategy": cfg.get("exit_strategy"),
+                "take_profit_price": float(ep*(1+Decimal(cfg.get("tp_percent",1))/100)),
+                "stop_loss_price": float(ep*(1-Decimal(cfg.get("sl_percent",1))/100)),
+                "reentry_count": 0,
+                "last_reentry": 0
+            }
+            save_state(state)
+            start_sokole_oko_thread()
+            logging.info(f"Position opened: {side}@{symbol} qty={qty} @ {ep}")
+            return True
+    logging.error(f"Nie udało się otworzyć pozycji: {res}")
+    return False
+
+def record_trade(reason):
+    s = load_state()
+    with open(HISTORY_FILE,'a',newline='') as f:
+        w = csv.writer(f)
+        w.writerow([
+            datetime.utcnow().isoformat(), reason,
+            s['symbol'], s['side'], s['quantity'],
+            s['entry_price'], s['take_profit_price'],
+            s['stop_loss_price']
+        ])
+
+def handle_signal(action):
+    state = load_state()
+    if action == 'buy':
+        if state['in_position']:
+            logging.warning("Sygnał 'buy' zignorowany – bot już w pozycji.")
+            return
+        open_position("BUY", cfg['trade_symbol'])
+    elif action == 'sell':
+        if not state['in_position']:
+            logging.warning("Sygnał 'sell' zignorowany – brak otwartej pozycji.")
+            return
+        close_position(state['symbol'], state['side'], state['quantity'])
+        record_trade("manual_sell")
+        save_state({
+            "in_position": False, "symbol": "", "side": "",
+            "entry_price": 0, "quantity": 0, "exit_strategy": "",
+            "take_profit_price": None, "stop_loss_price": None,
+            "reentry_count": 0, "last_reentry": 0
+        })
+        sokole_oko_active.clear()
+        logging.info("Pozycja zamknięta i stan zresetowany.")
+
+def start_sokole_oko_thread():
+    if not sokole_oko_active.is_set():
+        sokole_oko_active.set()
+        threading.Thread(target=sokole_oko,daemon=True).start()
+
+def sokole_oko():
+    logging.info("[Sokole Oko] Start monitoringu")
+    while sokole_oko_active.is_set():
+        time.sleep(10)
+        s = load_state()
+        if not s['in_position']:
+            sokole_oko_active.clear()
+            break
+        price = Decimal(send_request('GET','/fapi/v1/ticker/price',
+                         params={"symbol":s['symbol']})['price'])
+        tp = Decimal(s['take_profit_price'])
+        sl = Decimal(s['stop_loss_price'])
+        now = int(time.time())
+        if price>=tp or price<=sl:
+            close_position(s['symbol'],s['side'],s['quantity'])
+            record_trade("tp" if price>=tp else "sl")
+            sokole_oko_active.clear()
+            if cfg.get("reentry_enabled") and s['reentry_count']<cfg.get("reentry_max_count"):
+                if now - s['last_reentry']>=cfg.get("reentry_cooldown_seconds",60):
+                    s['reentry_count']+=1
+                    s['last_reentry']=now
+                    save_state(s)
+                    open_position("BUY" if s['side']=="SELL" else "SELL", cfg['trade_symbol'])
+            break
+
+@app.route('/')
+@basic_auth.required
+def dashboard():
+    balance = get_futures_balance(QUOTE_ASSET)
+    state = load_state()
+    history = []
+    if os.path.exists(HISTORY_FILE):
+        try:
+            history = list(csv.DictReader(open(HISTORY_FILE)))
+        except:
+            history = []
+    return render_template('dashboard.html',
+        state=state, config=cfg, balance=balance,
+        history=history, quote_asset=QUOTE_ASSET
+    )
+
+@app.route('/webhook',methods=['POST'])
+def webhook():
+    data = request.get_json(silent=True)
+    act = data.get('action') if data else None
+    if act in ('buy','sell'):
+        threading.Thread(target=handle_signal,args=(act,)).start()
+        return jsonify(status='ok'),200
+    return jsonify(status='invalid'),400
+
+@app.route('/save_config',methods=['POST'])
+@basic_auth.required
+def save_config_route():
+    s = load_state()
+    if s['in_position']:
+        flash("Nie można zapisać konfiguracji podczas otwartej pozycji","error")
+        return redirect(url_for('dashboard'))
+    try:
+        for k in ("trade_symbol","exit_strategy"):
+            cfg[k] = request.form[k]
+        for k in ("sl_percent","tp_percent","leverage","position_size_percent"):
+            cfg[k] = float(request.form[k])
+        cfg["reentry_enabled"] = bool(request.form.get("reentry_enabled"))
+        cfg["reentry_max_count"] = int(request.form["reentry_max_count"])
+        cfg["reentry_cooldown_seconds"] = int(request.form["reentry_cooldown_seconds"])
+        with open(CONFIG_FILE,'w') as f:
+            json.dump(cfg,indent=4)
+        flash("Konfiguracja zapisana","success")
+        threading.Thread(target=lambda:(
+            time.sleep(1),
+            subprocess.run(["sudo","systemctl","restart","kinga_bot.service"],check=True)
+        )).start()
+    except Exception as e:
+        flash(f"Błąd zapisu: {e}","error")
+    return redirect(url_for('dashboard'))
+
+if __name__=="__main__":
+    logging.info("=== Kombajn 16.1 start ===")
+    if load_state()['in_position']:
+        start_sokole_oko_thread()
+    serve(app,host='0.0.0.0',port=5000)
+

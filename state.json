@@ -1,0 +1,12 @@
+{
+    "in_position": true,
+    "symbol": "WLDUSDC",
+    "side": "short",
+    "entry_price": "1.60500000",
+    "quantity": "5.30000000",
+    "stop_loss_id": 258907767,
+    "exit_strategy": "take_profit",
+    "entry_timestamp": 1757609760.9852624,
+    "reentry_count": 2,
+    "take_profit_price": "1.601796407185628742337489896"
+}

@@ -1,0 +1,219 @@
+:root {
+    --bg-color: #121212;
+    --surface-color: #1e1e1e;
+    --primary-color: #00e5ff;
+    --secondary-color: #ab82ff;
+    --text-color: #e0e0e0;
+    --green-glow: #b2ff59;
+    --red-glow: #ff3d3d;
+}
+
+body {
+    font-family: 'Roboto', sans-serif;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    margin: 0;
+    padding: 20px;
+    font-size: 16px;
+}
+
+.container {
+    max-width: 1200px;
+    margin: auto;
+}
+
+.header {
+    text-align: center;
+    border-bottom: 2px solid var(--primary-color);
+    padding-bottom: 15px;
+    margin-bottom: 30px;
+}
+
+h1 {
+    font-family: 'Orbitron', sans-serif;
+    color: var(--primary-color);
+    margin: 0;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-shadow: 0 0 10px var(--primary-color), 0 0 20px var(--primary-color);
+}
+
+.top-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin: 15px 0;
+}
+
+.clock {
+    font-size: 1.2rem;
+    font-weight: 300;
+    color: var(--secondary-color);
+    background-color: var(--surface-color);
+    padding: 8px 18px;
+    border-radius: 8px;
+    text-align: center;
+    border: 1px solid #2a2a2a;
+}
+
+.clock .time {
+    font-weight: 700;
+    font-size: 1.5rem;
+    color: var(--primary-color);
+}
+
+.kinga-comment {
+    font-size: 0.9rem;
+    font-style: italic;
+    color: var(--secondary-color);
+    text-align: center;
+    margin-top: 5px;
+}
+
+.section {
+    background-color: var(--surface-color);
+    border-radius: 12px;
+    padding: 25px;
+    margin-bottom: 30px;
+    box-shadow: 0 0 15px rgba(0, 229, 255, 0.1);
+    border: 1px solid #2a2a2a;
+}
+
+h2 {
+    color: var(--primary-color);
+    margin-top: 0;
+    margin-bottom: 20px;
+    border-bottom: 1px solid #333;
+    padding-bottom: 10px;
+    font-weight: 400;
+}
+
+.grid-container {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 20px;
+}
+
+.status-box {
+    text-align: center;
+    padding: 20px;
+    border-radius: 8px;
+}
+
+.status-box .label {
+    font-size: 0.9rem;
+    opacity: 0.7;
+    margin-bottom: 10px;
+}
+
+.status-box .value {
+    font-size: 2rem;
+    font-weight: 700;
+}
+
+.status-idle {
+    background-color: #4a4a4a;
+}
+
+.status-active {
+    background: linear-gradient(145deg, #005f6b, #003c44);
+}
+
+.status-pnl-positive {
+    color: var(--green-glow);
+    text-shadow: 0 0 8px var(--green-glow);
+}
+
+.status-pnl-negative {
+    color: var(--red-glow);
+    text-shadow: 0 0 8px var(--red-glow);
+}
+
+.emergency-button {
+    background-color: var(--red-glow);
+    color: white;
+    border: none;
+    padding: 12px 25px;
+    border-radius: 8px;
+    font-weight: 700;
+    cursor: pointer;
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(255, 61, 61, 0.7); }
+    70% { box-shadow: 0 0 0 10px rgba(255, 61, 61, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(255, 61, 61, 0); }
+}
+
+button {
+    background-color: var(--primary-color);
+    border: none;
+    color: #121212;
+    font-weight: 700;
+    padding: 12px 20px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+button:disabled {
+    background-color: #555;
+    color: #888;
+    cursor: not-allowed;
+}
+
+.form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 20px;
+    align-items: center;
+}
+
+.form-group {
+    display: flex;
+    flex-direction: column;
+}
+
+label {
+    margin-bottom: 8px;
+    font-size: 0.9rem;
+    color: var(--secondary-color);
+}
+
+input, select {
+    background-color: #2c2c2c;
+    border: 1px solid #444;
+    border-radius: 6px;
+    padding: 10px;
+    color: var(--text-color);
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.table-wrapper {
+    overflow-x: auto;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+th, td {
+    padding: 12px 15px;
+    border-bottom: 1px solid #333;
+    text-align: left;
+    white-space: nowrap;
+}
+
+th {
+    background-color: #2a2a2a;
+    color: var(--primary-color);
+    font-weight: 400;
+}
+
+tbody tr:hover {
+    background-color: #2c2c2c;
+}
