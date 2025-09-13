@@ -1,10 +1,6 @@
+
 # ==================================================================================================
-#  PROJEKT "KOMBAJN" - WERSJA ODYSEJA 3.0 (PAKIET "ANTY-PYŁEK")
-#  AUTOR: Grzegorz & Twoja Partnerka AI
-#  DATA: 11.09.2025
-#  ZMIANY:
-#  - Zaimplementowano strategię "Anty-Pyłek": przy zamykaniu SHORT, bot kupuje o 0.1% więcej,
-#    aby zagwarantować pełną spłatę długu. To ostateczne rozwiązanie problemu.
+#  PROJEKT "KOMBAJN" - WERSJA ODYSEJA 4.0 (LOGOWANIE KULOODPORNE)
 # ==================================================================================================
 import os
 import sys
@@ -18,16 +14,32 @@ import logging
 import threading
 import csv
 import subprocess
-from decimal import Decimal, getcontext, ROUND_DOWN, ROUND_UP
+from decimal import Decimal, getcontext, ROUND_DOWN
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
 from flask import Flask, request, render_template, jsonify, flash, redirect, url_for
 from flask_basicauth import BasicAuth
 from waitress import serve
 
-# --- SEKCJA 1: KONFIGURACJA I ZMIENNE GLOBALNE ---
+# --- SEKCJA 1: KONFIGURACJA I ZMIENNE GLOBALNE (WERSJA Z DZIENNIKIEM) ---
 getcontext().prec = 18
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Konfiguracja logowania do pliku
+log_file = os.path.join(BASE_DIR, 'bot.log')
+file_handler = RotatingFileHandler(log_file, maxBytes=5*1024*1024, backupCount=2)
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s [wątek:%(threadName)s]'))
+
+# Konfiguracja logowania do konsoli (dla journalctl)
+stream_handler = logging.StreamHandler(sys.stdout)
+stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+
+# Ustawienie głównego loggera
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.DEBUG)
+root_logger.addHandler(file_handler)
+root_logger.addHandler(stream_handler)
+
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
 STATE_FILE = os.path.join(BASE_DIR, "state.json")
 HISTORY_FILE = os.path.join(BASE_DIR, "trades_history.csv")
@@ -39,20 +51,16 @@ def create_default_config_if_not_exists():
         default_config = {
             "api_key": "TWOJ_KLUCZ_API", "secret_key": "TWOJ_SEKRETNY_KLUCZ",
             "dashboard_user": "admin", "dashboard_pass": "password",
-            "service_name": "bot.service", "quote_asset": "USDC", "trade_symbol": "BTCUSDC",
-            "position_size_percent": 50.0, "sl_percent": 2.0,
-            "exit_strategy": "take_profit", "tp_percent": 5.0,
-            "ts_activation_percent": 2.0, "ts_distance_percent": 1.0,
-            "reentry_enabled": True, "reentry_max_count": 1, "reentry_cooldown_seconds": 5
+            "service_name": "bot.service", "quote_asset": "USDC", "trade_symbol": "WLDUSDC",
+            "position_size_percent": 50.0, "sl_percent": 2.0, "exit_strategy": "take_profit", "tp_percent": 5.0,
         }
-        with open(CONFIG_FILE, 'w') as f:
-            json.dump(default_config, f, indent=4)
+        with open(CONFIG_FILE, 'w') as f: json.dump(default_config, f, indent=4)
         logging.info(f"Utworzono domyślny plik konfiguracyjny: {CONFIG_FILE}. Uzupełnij klucze API.")
         sys.exit(0)
 
 def load_config():
-    with open(CONFIG_FILE) as f:
-        return json.load(f)
+    with open(CONFIG_FILE) as f: return json.load(f)
+
 
 # --- SEKCJA 2: FUNKCJE POMOCNICZE I NARZĘDZIOWE ---
 def load_state():
@@ -85,12 +93,27 @@ def send_request(method, path, params={}, signed=False, margin=False):
     except requests.exceptions.RequestException as e:
         logging.error(f"Błąd komunikacji z API Binance: {e}")
         try:
-            return e.response.json() if e.response else None
+            if e.response:
+                error_content = e.response.json()
+                logging.error(f"Odpowiedź serwera Binance: {error_content}")
+                return error_content
+            return None
         except json.JSONDecodeError:
             return None
 
-def format_number(n):
-    return f"{Decimal(n).normalize():f}"
+# === NOWE, PRECYZYJNE FUNKCJE FORMATUJĄCE ===
+def get_step_precision(step_size_decimal):
+    return abs(step_size_decimal.as_tuple().exponent)
+
+def format_price(price, precision):
+    tick_size = precision['TICK_SIZE']
+    precision_level = get_step_precision(tick_size)
+    return f"{price:.{precision_level}f}"
+
+def format_quantity(quantity, precision):
+    step_size = precision['STEP_SIZE']
+    precision_level = get_step_precision(step_size)
+    return f"{quantity:.{precision_level}f}"
 
 def get_precision_data(symbol):
     data = send_request('GET', '/exchangeInfo', {'symbol': symbol})
@@ -122,14 +145,19 @@ def get_debt(asset):
 # --- SEKCJA 3: RDZEŃ LOGIKI HANDLOWEJ ---
 def place_stop_loss_order(symbol, side, quantity, stop_price, precision):
     tick_size = precision['TICK_SIZE']
-    stop_price_formatted = (stop_price / tick_size).quantize(Decimal('1'), rounding=ROUND_DOWN) * tick_size
+    stop_price_adjusted = (stop_price / tick_size).quantize(Decimal('1'), rounding=ROUND_DOWN) * tick_size
+    
     sl_params = {
-        'symbol': symbol, 'side': side, 'type': 'STOP_LOSS',
-        'quantity': format_number(quantity), 'stopPrice': format_number(stop_price_formatted)
+        'symbol': symbol,
+        'side': side,
+        'type': 'STOP_LOSS',
+        'quantity': format_quantity(quantity, precision),
+        'stopPrice': format_price(stop_price_adjusted, precision)
     }
     sl_response = send_request('POST', '/order', sl_params, signed=True, margin=True)
+    
     if sl_response and 'orderId' in sl_response:
-        logging.info(f">>> SUKCES! SL (STOP_LOSS) ustawiony [ID: {sl_response['orderId']}] na cenie {stop_price_formatted}")
+        logging.info(f">>> SUKCES! SL (STOP_LOSS) ustawiony [ID: {sl_response['orderId']}] na cenie {stop_price_adjusted}")
         return sl_response['orderId']
     else:
         logging.critical(f"!!! BŁĄD KRYTYCZNY: Nie udało się ustawić zlecenia SL! Odpowiedź Binance: {sl_response}")
@@ -148,16 +176,20 @@ def cancel_order(symbol, order_id):
         logging.warning(f"--- OSTRZEŻENIE: Nie udało się anulować zlecenia [ID: {order_id}]. Odpowiedź: {response}")
         return False
 
-def log_trade_history(symbol, side, quantity, entry_price, exit_price, entry_ts, exit_ts, reason, pnl=None):
+def log_trade_history(symbol, side, quantity, entry_price, exit_price, entry_ts, exit_ts, reason, pnl=None, precision=None):
     try:
         write_header = not os.path.exists(HISTORY_FILE) or os.stat(HISTORY_FILE).st_size == 0
+        quantity_str = format_quantity(quantity, precision) if precision else str(quantity)
+        entry_price_str = format_price(entry_price, precision) if precision else str(entry_price)
+        exit_price_str = format_price(exit_price, precision) if precision else str(exit_price)
+        
         with open(HISTORY_FILE, 'a', newline='') as csvfile:
             fieldnames = ['symbol', 'side', 'quantity', 'entry_price', 'exit_price', 'pnl', 'entry_timestamp', 'exit_timestamp', 'exit_reason']
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             if write_header: writer.writeheader()
             writer.writerow({
-                'symbol': symbol, 'side': side, 'quantity': format_number(quantity),
-                'entry_price': format_number(entry_price), 'exit_price': format_number(exit_price),
+                'symbol': symbol, 'side': side, 'quantity': quantity_str,
+                'entry_price': entry_price_str, 'exit_price': exit_price_str,
                 'pnl': f"{pnl:.4f}" if pnl is not None else "0.0",
                 'entry_timestamp': datetime.fromtimestamp(entry_ts).isoformat(),
                 'exit_timestamp': datetime.fromtimestamp(exit_ts).isoformat(),
@@ -179,11 +211,16 @@ def price_monitor():
             if not current_price:
                 time.sleep(10); continue
             strategy = state.get("exit_strategy")
+            precision = get_precision_data(symbol)
+            if not precision:
+                logging.error(f"Sokole Oko: Nie udało się pobrać precyzji dla {symbol}. Próbuję ponownie za 10s.")
+                time.sleep(10); continue
+                
             if strategy == "take_profit":
                 tp_price = Decimal(state['take_profit_price'])
                 if (side == 'long' and current_price >= tp_price) or (side == 'short' and current_price <= tp_price):
                     logging.info("$$$ SOKOLE OKO (TP): CEL OSIĄGNIĘTY! $$$")
-                    close_position(state, get_precision_data(symbol), exit_price=current_price, exit_reason="Take Profit")
+                    close_position(state, precision, exit_price=current_price, exit_reason="Take Profit")
                     break
             elif strategy == "trailing_stop":
                 ts_activated = state.get('ts_activated', False)
@@ -196,11 +233,11 @@ def price_monitor():
                 else:
                     extremum_price = Decimal(state['ts_extremum_price'])
                     if (side == 'long' and current_price > extremum_price) or (side == 'short' and current_price < extremum_price):
-                        logging.info(f"[TS] Nowy szczyt/dołek: {current_price:.4f}. Przesuwam SL.")
+                        logging.info(f"[TS] Nowy szczyt/dołek: {format_price(current_price, precision)}. Przesuwam SL.")
                         ts_dist_perc = Decimal(cfg.get('ts_distance_percent', 1.0))
                         distance_factor = Decimal('1') - (ts_dist_perc / Decimal('100'))
                         new_stop_price = current_price * distance_factor if side == 'long' else current_price / distance_factor
-                        precision = get_precision_data(symbol)
+                        
                         if cancel_order(symbol, state.get('stop_loss_id')):
                             new_sl_id = place_stop_loss_order(symbol, 'SELL' if side == 'long' else 'BUY', Decimal(state['quantity']), new_stop_price, precision)
                             if new_sl_id:
@@ -233,13 +270,13 @@ def _open_position_helper(side, symbol, precision, reentry_count=0):
         debt_amount = get_debt(base_asset)
         if debt_amount > 0:
             logging.warning(f"Wykryto istniejący dług na {base_asset} w wysokości {debt_amount}. Zostanie on spłacony przy zamykaniu tej pozycji.")
-        loan_params = {'asset': base_asset, 'amount': format_number(quantity)}
+        loan_params = {'asset': base_asset, 'amount': format_quantity(quantity, precision)}
         loan_response = send_request('POST', '/loan', loan_params, signed=True, margin=True)
         if not (loan_response and 'tranId' in loan_response):
             logging.error(f"Błąd podczas zaciągania pożyczki dla pozycji SHORT. Odpowiedź: {loan_response}"); return
         logging.info(f"Pożyczka dla SHORT udana [ID: {loan_response['tranId']}]"); time.sleep(2)
     order_side = 'BUY' if side == 'long' else 'SELL'
-    order_params = {'symbol': symbol, 'side': order_side, 'type': 'MARKET', 'quantity': format_number(quantity)}
+    order_params = {'symbol': symbol, 'side': order_side, 'type': 'MARKET', 'quantity': format_quantity(quantity, precision)}
     logging.info(f">>> PARAMETRY ZLECENIA MARKET: {json.dumps(order_params)}")
     order_response = send_request('POST', '/order', order_params, signed=True, margin=True)
     if not (order_response and 'orderId' in order_response):
@@ -276,9 +313,8 @@ def open_short_position(symbol, precision, reentry_count=0):
     _open_position_helper('short', symbol, precision, reentry_count)
 
 def close_position(state, precision, exit_price=None, exit_reason="N/A"):
-    """Zamyka otwartą pozycję i obsługuje logikę ponownego wejścia ('Ognisty Podmuch')."""
     monitoring_active.clear()
-    time.sleep(1) 
+    time.sleep(1)
 
     symbol = state['symbol']
     side = state['side']
@@ -287,25 +323,23 @@ def close_position(state, precision, exit_price=None, exit_reason="N/A"):
     entry_price = Decimal(state['entry_price'])
     entry_timestamp = state.get('entry_timestamp', time.time())
 
-    # POPRAWKA 1: Odporne anulowanie zlecenia SL
     if stop_loss_id:
         try:
             cancel_order(symbol, stop_loss_id)
         except Exception as e:
             logging.warning(f"--- OSTRZEŻENIE: Nie udało się anulować zlecenia SL [ID: {stop_loss_id}], prawdopodobnie już nie istniało. Błąd: {e}")
 
-    # Twoja modyfikacja "Anty-Pyłek" - zostaje, jest świetna!
     if side == 'short':
         base_asset = symbol.replace(QUOTE_ASSET, '')
         debt = get_debt(base_asset)
         if debt > 0:
             logging.info(f">>> ANTY-PYŁEK: Zwiększam ilość do odkupienia o wykryty dług: {debt}")
             quantity += debt
-            
+
     close_side = 'BUY' if side == 'short' else 'SELL'
-    close_params = {'symbol': symbol, 'side': close_side, 'type': 'MARKET', 'quantity': format_number(quantity), 'sideEffectType': 'AUTO_REPAY'}
+    close_params = {'symbol': symbol, 'side': close_side, 'type': 'MARKET', 'quantity': format_quantity(quantity, precision), 'sideEffectType': 'AUTO_REPAY'}
     close_response = send_request('POST', '/order', close_params, signed=True, margin=True)
-    
+
     if not (close_response and 'orderId' in close_response):
         logging.critical(f"!!! KRYTYCZNY BŁĄD: Nie udało się zamknąć pozycji! Odpowiedź: {close_response}")
         save_state({"in_position": False})
@@ -313,19 +347,17 @@ def close_position(state, precision, exit_price=None, exit_reason="N/A"):
 
     final_exit_price = exit_price if exit_price else get_current_price(symbol)
     if not final_exit_price: final_exit_price = entry_price # Fallback
-        
+
     pnl = (final_exit_price - entry_price) * quantity if side == 'long' else (entry_price - final_exit_price) * quantity
-    log_trade_history(symbol, side, quantity, entry_price, final_exit_price, entry_timestamp, time.time(), exit_reason, pnl)
-    
+    log_trade_history(symbol, side, quantity, entry_price, final_exit_price, entry_timestamp, time.time(), exit_reason, pnl, precision)
+
     cfg = load_config()
-    
-    # POPRAWKA 2: Inteligentny "Ognisty Podmuch" z weryfikacją salda
+
     if exit_reason == "Take Profit" and cfg.get("reentry_enabled", False) and state.get("reentry_count", 0) < cfg.get("reentry_max_count", 0):
         cooldown = cfg.get("reentry_cooldown_seconds", 5)
         logging.info(f"--- Aktywuję OGNISTY PODMUCH! Czekam {cooldown}s na ustabilizowanie salda...")
-        time.sleep(cooldown) # Początkowe opóźnienie
+        time.sleep(cooldown)
 
-        # Pętla sprawdzająca, czy saldo jest już dostępne
         initial_balance = get_margin_balance(QUOTE_ASSET)
         retries = 5
         while retries > 0:
@@ -334,12 +366,11 @@ def close_position(state, precision, exit_price=None, exit_reason="N/A"):
                 logging.info(f"Saldo ({current_balance} {QUOTE_ASSET}) jest gotowe. Kontynuuję 'Ognisty Podmuch'.")
                 new_reentry_count = state.get("reentry_count", 0) + 1
                 if side == 'long':
-                    # Po zamknięciu LONG, Ognisty Podmuch może otworzyć SHORT, jeśli taka jest strategia
                     open_short_position(symbol, precision, reentry_count=new_reentry_count)
                 elif side == 'short':
                     open_long_position(symbol, precision, reentry_count=new_reentry_count)
-                return # Zakończ funkcję po udanym re-entry
-            
+                return
+
             logging.warning(f"Saldo wciąż nie jest gotowe. Czekam 2s... (Próba {6-retries}/5)")
             time.sleep(2)
             retries -= 1
@@ -504,6 +535,7 @@ def save_config_route():
 # --- SEKCJA 5: URUCHOMIENIE SERWERA ---
 if __name__ == '__main__':
     if load_state().get("in_position"): start_monitoring_thread()
-    logging.info(">>> URUCHAMIANIE SERWERA PRODUKCYJNEGO WAITRESS NA PORCIE 5000 <<<")
-    serve(app, host='0.0.0.0', port=5000, threads=10)
+    logging.info(">>> URUCHAMIANIE SERWERA PRODUKCYJNEGO WAITRESS NA PORCIE 5001 <<<")
+    serve(app, host='0.0.0.0', port=5001, threads=10)
+EOF
 

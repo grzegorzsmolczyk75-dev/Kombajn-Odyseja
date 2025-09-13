@@ -152,7 +152,7 @@
                     <div class="card-header">Strefa Awaryjna</div>
                     <div class="card-body text-center">
                         <p class="small">Użyj TYLKO, gdy bot się zablokuje.</p>
-                        <form action="{{ url_for('emergency_reset') }}" method="post" onsubmit="return confirm('JESTEŚ PEWIEN? To usunie plik stanu i zrestartuje bota!');" class="d-inline">
+                        <form action="{{ url_for('emergency_reset') }}" method="post"
                             <button type="submit" class="btn btn-light">Awaryjny Reset Stanu</button>
                         </form>
                     </div>
